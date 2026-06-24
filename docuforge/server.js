@@ -330,7 +330,7 @@ const HTML = `<!DOCTYPE html>
     <div class="info-grid">
       <div class="info-card">
         <div class="info-card-title">AI Model</div>
-        <div class="info-card-val">llama-3.3-70b<br/>via Groq</div>
+        <div class="info-card-val">llama-3.1-8b-instant<br/>via Groq</div>
       </div>
       <div class="info-card">
         <div class="info-card-title">Output Format</div>
@@ -640,15 +640,21 @@ app.post("/api/format", async (req, res) => {
 
   let markdown;
   try {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: text },
-      ],
-      temperature: 0.1,
-      max_tokens: 8192,
-    });
+    // llama-3.1-8b-instant: fastest Groq model, keeps us well within Render's 30s limit
+    const completion = await Promise.race([
+      groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: text },
+        ],
+        temperature: 0.1,
+        max_tokens: 8192,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Request timed out. Try with shorter text.")), 25000)
+      ),
+    ]);
     markdown = completion.choices[0]?.message?.content || "";
   } catch (err) {
     console.error("Groq error:", err.message);
