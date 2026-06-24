@@ -373,7 +373,7 @@ const HTML = `<!DOCTYPE html>
 
   // ── Client-side chunking ──────────────────────────────────────────────────
   // Each chunk is sent in a separate short HTTP request so Render's 90s
-  // response timeout is never hit. The 35s delay between chunks happens
+  // response timeout is never hit. A short delay between chunks happens
   // in the browser, not on the server.
 
   function splitChunks(text, n) {
@@ -388,13 +388,13 @@ const HTML = `<!DOCTYPE html>
 
   function mergeMarkdowns(parts) {
     const bodies = [], refs = [];
-    const refRe = /^##\\s+references\\s*$/i;
+    const refRe = /^#{1,3}\\s+references\\s*$/i;
     for (const part of parts) {
       const lines = part.split('\\n');
       let inRef = false, body = [];
       for (const line of lines) {
         if (refRe.test(line.trim())) { inRef = true; continue; }
-        if (inRef && line.trim().startsWith('## ')) { inRef = false; body.push(line); continue; }
+        if (inRef && /^#{1,3}\\s+/.test(line.trim())) { inRef = false; body.push(line); continue; }
         if (inRef) { if (line.trim()) refs.push(line); }
         else body.push(line);
       }
@@ -413,7 +413,7 @@ const HTML = `<!DOCTYPE html>
     const text = textarea.value.trim();
     if (!text) { setStatus('error', '<span>⚠ Paste some text first.</span>'); return; }
 
-    const DELAY_MS = 35000;
+    const DELAY_MS = 3000;
     const TARGET_TOKENS = 1200;
     const numChunks = Math.min(8, Math.max(3, Math.ceil(text.length / (4 * TARGET_TOKENS))));
     const chunks = splitChunks(text, numChunks);
@@ -489,10 +489,10 @@ const HTML = `<!DOCTYPE html>
 const SYSTEM_PROMPT = `Convert raw text to Markdown. Rules:
 1. Output ONLY Markdown — no commentary, no code fences.
 2. Preserve EVERY word. Never summarise, omit, or add content.
-3. Headings: document title → #, major sections → ##, subsections → ###.
+3. Headings: ONLY mark a line as a heading (#, ##, ###) if it is clearly a real section/document title in the source (e.g. "Methodology", "Results", "Discussion", "Conclusion", "References"). A normal sentence or citation discussion paragraph is NEVER a heading, no matter how it looks. Never bold/center a paragraph by turning it into a heading.
 4. Lists: enumerated items → numbered list; item groups → bullet list.
-5. Tables: comparative or multi-attribute data MUST become a Markdown table with header row.
-6. References: collect ALL citations into a single ## References section at the end, one bullet per entry.
+5. Tables: comparative or multi-attribute data MUST become a Markdown table with a header row AND fully populated data rows. If you cannot find real values to put in every cell, do NOT create a table — output that content as normal paragraph text instead. Never output a table with empty cells.
+6. References: collect ALL citations from this chunk into a single section headed EXACTLY "## References" (two # characters, nothing more, nothing less) at the end, one bullet per entry, full citation text preserved. Do not use "#" or "###" for this heading.
 7. Bold existing emphasis as **text**; italicise titles/terms as *text*.`;
 
 // ─── Markdown → docx Parser ──────────────────────────────────────────────────
@@ -677,7 +677,7 @@ function splitIntoParagraphChunks(text, n) {
 function mergeMarkdowns(parts) {
   const bodies = [];
   const refLines = [];
-  const refHeadingRe = /^##\s+references\s*$/i;
+  const refHeadingRe = /^#{1,3}\s+references\s*$/i;
 
   for (const part of parts) {
     const lines = part.split("\n");
@@ -689,7 +689,7 @@ function mergeMarkdowns(parts) {
         inRefs = true;
         continue;
       }
-      if (inRefs && line.trim().startsWith("## ")) {
+      if (inRefs && /^#{1,3}\s+/.test(line.trim())) {
         // Another heading after references — stop collecting refs
         inRefs = false;
         bodyLines.push(line);
