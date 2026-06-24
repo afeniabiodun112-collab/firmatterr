@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const Groq = require("groq-sdk");
+const { GoogleGenAI } = require("@google/genai");
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel,
   AlignmentType, Table, TableRow, TableCell, WidthType,
@@ -330,7 +330,7 @@ const HTML = `<!DOCTYPE html>
     <div class="info-grid">
       <div class="info-card">
         <div class="info-card-title">AI Model</div>
-        <div class="info-card-val">llama-3.1-8b-instant<br/>via Groq</div>
+        <div class="info-card-val">gemini-3.1-flash-lite<br/>via Google Gemini</div>
       </div>
       <div class="info-card">
         <div class="info-card-title">Output Format</div>
@@ -345,7 +345,7 @@ const HTML = `<!DOCTYPE html>
 
   <footer>
     <span>DocuForge — paste raw, export professional</span>
-    <span>Powered by Groq + docx</span>
+    <span>Powered by Gemini + docx</span>
   </footer>
 </div>
 
@@ -377,20 +377,20 @@ const HTML = `<!DOCTYPE html>
   // in the browser, not on the server.
 
   function splitChunks(text, n) {
-    const paras = text.split(/\n\s*\n/).filter(p => p.trim());
+    const paras = text.split(/\\n\\s*\\n/).filter(p => p.trim());
     if (paras.length <= n) return paras;
     const size = Math.ceil(paras.length / n);
     const out = [];
     for (let i = 0; i < paras.length; i += size)
-      out.push(paras.slice(i, i + size).join('\n\n'));
+      out.push(paras.slice(i, i + size).join('\\n\\n'));
     return out;
   }
 
   function mergeMarkdowns(parts) {
     const bodies = [], refs = [];
-    const refRe = /^##\s+references\s*$/i;
+    const refRe = /^##\\s+references\\s*$/i;
     for (const part of parts) {
-      const lines = part.split('\n');
+      const lines = part.split('\\n');
       let inRef = false, body = [];
       for (const line of lines) {
         if (refRe.test(line.trim())) { inRef = true; continue; }
@@ -398,13 +398,13 @@ const HTML = `<!DOCTYPE html>
         if (inRef) { if (line.trim()) refs.push(line); }
         else body.push(line);
       }
-      bodies.push(body.join('\n').trim());
+      bodies.push(body.join('\\n').trim());
     }
-    let merged = bodies.join('\n\n');
+    let merged = bodies.join('\\n\\n');
     if (refs.length) {
       const seen = new Set();
       const unique = refs.filter(l => { const k = l.trim().toLowerCase(); return seen.has(k) ? false : seen.add(k); });
-      merged += '\n\n## References\n\n' + unique.join('\n');
+      merged += '\\n\\n## References\\n\\n' + unique.join('\\n');
     }
     return merged;
   }
@@ -484,8 +484,8 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// ─── Groq System Prompt ──────────────────────────────────────────────────────
-// Kept short to stay within Groq free tier (6 000 TPM).
+// ─── Gemini System Prompt ────────────────────────────────────────────────────
+// Kept short and strict so gemini-3.1-flash-lite stays on-task per chunk.
 const SYSTEM_PROMPT = `Convert raw text to Markdown. Rules:
 1. Output ONLY Markdown — no commentary, no code fences.
 2. Preserve EVERY word. Never summarise, omit, or add content.
@@ -719,18 +719,18 @@ function mergeMarkdowns(parts) {
   return merged;
 }
 
-/** Call Groq for one chunk with a per-chunk timeout */
-async function processChunk(groq, chunk, chunkIndex) {
-  const CHUNK_TIMEOUT = 55000; // 55s per chunk (generous for slow Groq free tier)
-  const completion = await Promise.race([
-    groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: chunk },
-      ],
-      temperature: 0.1,
-      max_tokens: 2500,
+/** Call Gemini for one chunk with a per-chunk timeout */
+async function processChunk(ai, chunk, chunkIndex) {
+  const CHUNK_TIMEOUT = 55000; // 55s per chunk
+  const response = await Promise.race([
+    ai.models.generateContent({
+      model: "gemini-3.1-flash-lite",
+      contents: chunk,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.1,
+        maxOutputTokens: 2500,
+      },
     }),
     new Promise((_, reject) =>
       setTimeout(
@@ -739,7 +739,7 @@ async function processChunk(groq, chunk, chunkIndex) {
       )
     ),
   ]);
-  return completion.choices[0]?.message?.content || "";
+  return response.text || "";
 }
 
 // ─── API Routes ──────────────────────────────────────────────────────────────
@@ -752,13 +752,13 @@ app.post("/api/format-chunk", async (req, res) => {
     return res.status(400).json({ error: "No chunk provided." });
   }
 
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   try {
-    const result = await processChunk(groq, chunk, 0);
+    const result = await processChunk(ai, chunk, 0);
     res.json({ markdown: result });
   } catch (err) {
-    console.error("Groq chunk error:", err.message);
-    res.status(502).json({ error: "Groq API error: " + err.message });
+    console.error("Gemini chunk error:", err.message);
+    res.status(502).json({ error: "Gemini API error: " + err.message });
   }
 });
 

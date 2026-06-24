@@ -2,7 +2,7 @@
 
 Paste raw text → AI detects structure → Download a formatted `.docx`.
 
-Powered by Groq (llama-3.3-70b-versatile) + the `docx` npm package.
+Powered by Google Gemini (gemini-3.1-flash-lite) + the `docx` npm package.
 
 ---
 
@@ -10,14 +10,14 @@ Powered by Groq (llama-3.3-70b-versatile) + the `docx` npm package.
 
 ```bash
 cp .env.example .env
-# Add your GROQ_API_KEY to .env
+# Add your GEMINI_API_KEY to .env
 
 npm install
 npm start
 # Open http://localhost:3000
 ```
 
-Get a free Groq API key at https://console.groq.com
+Get a Gemini API key at https://aistudio.google.com/app/apikey
 
 ---
 
@@ -27,7 +27,7 @@ Get a free Groq API key at https://console.groq.com
 2. Go to https://render.com → New → Web Service
 3. Connect your GitHub repo
 4. Render auto-detects `render.yaml` — click **Apply**
-5. In Environment Variables, set `GROQ_API_KEY` to your Groq key
+5. In Environment Variables, set `GEMINI_API_KEY` to your Gemini key
 6. Click **Deploy** — done. Your URL is live in ~60 seconds.
 
 ---
@@ -36,7 +36,7 @@ Get a free Groq API key at https://console.groq.com
 
 | Feature | Detail |
 |---|---|
-| AI model | llama-3.3-70b via Groq |
+| AI model | gemini-3.1-flash-lite via Gemini |
 | Font | Times New Roman throughout |
 | Title | 18pt bold centered |
 | Headings | 14pt / 13pt bold |
