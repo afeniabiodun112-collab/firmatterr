@@ -371,52 +371,113 @@ const HTML = `<!DOCTYPE html>
     status.innerHTML = '';
   }
 
+  // ── Client-side chunking ──────────────────────────────────────────────────
+  // Each chunk is sent in a separate short HTTP request so Render's 90s
+  // response timeout is never hit. The 35s delay between chunks happens
+  // in the browser, not on the server.
+
+  function splitChunks(text, n) {
+    const paras = text.split(/\n\s*\n/).filter(p => p.trim());
+    if (paras.length <= n) return paras;
+    const size = Math.ceil(paras.length / n);
+    const out = [];
+    for (let i = 0; i < paras.length; i += size)
+      out.push(paras.slice(i, i + size).join('\n\n'));
+    return out;
+  }
+
+  function mergeMarkdowns(parts) {
+    const bodies = [], refs = [];
+    const refRe = /^##\s+references\s*$/i;
+    for (const part of parts) {
+      const lines = part.split('\n');
+      let inRef = false, body = [];
+      for (const line of lines) {
+        if (refRe.test(line.trim())) { inRef = true; continue; }
+        if (inRef && line.trim().startsWith('## ')) { inRef = false; body.push(line); continue; }
+        if (inRef) { if (line.trim()) refs.push(line); }
+        else body.push(line);
+      }
+      bodies.push(body.join('\n').trim());
+    }
+    let merged = bodies.join('\n\n');
+    if (refs.length) {
+      const seen = new Set();
+      const unique = refs.filter(l => { const k = l.trim().toLowerCase(); return seen.has(k) ? false : seen.add(k); });
+      merged += '\n\n## References\n\n' + unique.join('\n');
+    }
+    return merged;
+  }
+
   async function handleFormat() {
     const text = textarea.value.trim();
-    if (!text) {
-      setStatus('error', '<span>⚠ Paste some text first.</span>');
-      return;
-    }
+    if (!text) { setStatus('error', '<span>⚠ Paste some text first.</span>'); return; }
+
+    const DELAY_MS = 35000;
+    const TARGET_TOKENS = 1200;
+    const numChunks = Math.min(8, Math.max(3, Math.ceil(text.length / (4 * TARGET_TOKENS))));
+    const chunks = splitChunks(text, numChunks);
 
     btn.disabled = true;
-    btn.innerHTML = \`<span class="spinner"></span> Formatting…\`;
-    const totalChunks = Math.min(8, Math.max(3, Math.ceil(text.length / (4 * 1200))));
-    setStatus('info', \`<span class="spinner"></span><span>Processing chunk 1 of \${totalChunks} — large documents take 1–3 min…</span>\`);
+    btn.innerHTML = `<span class="spinner"></span> Formatting\u2026`;
 
     try {
-      const res = await fetch('/api/format', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
+      const markdownParts = [];
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || 'Server error');
+      for (let i = 0; i < chunks.length; i++) {
+        if (i > 0) {
+          // Countdown so the user knows it's not frozen
+          for (let s = Math.ceil(DELAY_MS / 1000); s > 0; s--) {
+            setStatus('info', `<span class="spinner"></span><span>Chunk ${i}/${chunks.length} done \u2014 waiting ${s}s before next\u2026</span>`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+
+        setStatus('info', `<span class="spinner"></span><span>Processing chunk ${i + 1} of ${chunks.length}\u2026</span>`);
+
+        const res = await fetch('/api/format-chunk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chunk: chunks[i] }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(err.error || 'Server error on chunk ' + (i + 1));
+        }
+        const data = await res.json();
+        markdownParts.push(data.markdown);
       }
 
-      setStatus('info', '<span class="spinner"></span><span>Building .docx file…</span>');
+      setStatus('info', '<span class="spinner"></span><span>Building .docx file\u2026</span>');
+      const merged = mergeMarkdowns(markdownParts);
 
-      const blob = await res.blob();
+      const docRes = await fetch('/api/build-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markdown: merged }),
+      });
+      if (!docRes.ok) {
+        const err = await docRes.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || 'Failed to build document');
+      }
+
+      const blob = await docRes.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = 'DocuForge_output.docx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      a.href = url; a.download = 'DocuForge_output.docx';
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
+      setStatus('success', '<span>\u2713 Document downloaded successfully!</span>');
 
-      setStatus('success', '<span>✓ Document downloaded successfully!</span>');
     } catch (e) {
-      setStatus('error', \`<span>✗ \${e.message}</span>\`);
+      setStatus('error', `<span>\u2717 ${e.message}</span>`);
     } finally {
       btn.disabled = false;
-      btn.innerHTML = \`
+      btn.innerHTML = `
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
-        Format &amp; Export .docx\`;
+        Format &amp; Export .docx`;
     }
   }
 </script>
@@ -681,38 +742,32 @@ async function processChunk(groq, chunk, chunkIndex) {
   return completion.choices[0]?.message?.content || "";
 }
 
-// ─── API Route ───────────────────────────────────────────────────────────────
-app.post("/api/format", async (req, res) => {
-  const { text } = req.body;
-  if (!text || typeof text !== "string" || !text.trim()) {
-    return res.status(400).json({ error: "No text provided." });
+// ─── API Routes ──────────────────────────────────────────────────────────────
+
+// POST /api/format-chunk  { chunk: string } → { markdown: string }
+// Called once per chunk from the frontend. Each request is short (<30s).
+app.post("/api/format-chunk", async (req, res) => {
+  const { chunk } = req.body;
+  if (!chunk || typeof chunk !== "string" || !chunk.trim()) {
+    return res.status(400).json({ error: "No chunk provided." });
   }
 
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-  // Dynamic chunking: calcChunkCount targets ~1 200 user tokens/chunk so
-  // each call stays under Groq's 6 000 TPM free limit.
-  // 35 s delay between chunks lets the TPM window partially reset.
-  const NUM_CHUNKS = calcChunkCount(text);
-  const INTER_CHUNK_DELAY = 35000;
-
-  const chunks = splitIntoParagraphChunks(text, NUM_CHUNKS);
-  const markdownParts = [];
-
-  console.log(`Text ~${Math.ceil(text.length/4)} tokens → ${NUM_CHUNKS} chunks`);
-
-  let markdown;
   try {
-    for (let i = 0; i < chunks.length; i++) {
-      if (i > 0) await sleep(INTER_CHUNK_DELAY);
-      console.log(`Processing chunk ${i + 1}/${chunks.length} (~${Math.ceil(chunks[i].length/4)} tokens)`);
-      const result = await processChunk(groq, chunks[i], i);
-      markdownParts.push(result);
-    }
-    markdown = mergeMarkdowns(markdownParts);
+    const result = await processChunk(groq, chunk, 0);
+    res.json({ markdown: result });
   } catch (err) {
-    console.error("Groq error:", err.message);
-    return res.status(502).json({ error: "Groq API error: " + err.message });
+    console.error("Groq chunk error:", err.message);
+    res.status(502).json({ error: "Groq API error: " + err.message });
+  }
+});
+
+// POST /api/build-docx  { markdown: string } → .docx binary
+// Called once after all chunks are merged by the frontend.
+app.post("/api/build-docx", async (req, res) => {
+  const { markdown } = req.body;
+  if (!markdown || typeof markdown !== "string" || !markdown.trim()) {
+    return res.status(400).json({ error: "No markdown provided." });
   }
 
   let docxChildren;
