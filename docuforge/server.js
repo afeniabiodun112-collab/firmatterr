@@ -488,11 +488,11 @@ const HTML = `<!DOCTYPE html>
 // Kept short and strict so gemini-3.1-flash-lite stays on-task per chunk.
 const SYSTEM_PROMPT = `Convert raw text to Markdown. Rules:
 1. Output ONLY Markdown — no commentary, no code fences.
-2. Preserve EVERY word. Never summarise, omit, or add content.
+2. Preserve EVERY word and EVERY value exactly as given. Never summarise, omit, regenerate, or add content. If the input already contains a table (rows of data separated by | or aligned in columns), copy every cell's text into the Markdown table EXACTLY as written — never leave a cell blank, never rebuild the table from memory.
 3. Headings: ONLY mark a line as a heading (#, ##, ###) if it is clearly a real section/document title in the source (e.g. "Methodology", "Results", "Discussion", "Conclusion", "References"). A normal sentence or citation discussion paragraph is NEVER a heading, no matter how it looks. Never bold/center a paragraph by turning it into a heading.
 4. Lists: enumerated items → numbered list; item groups → bullet list.
-5. Tables: comparative or multi-attribute data MUST become a Markdown table with a header row AND fully populated data rows. If you cannot find real values to put in every cell, do NOT create a table — output that content as normal paragraph text instead. Never output a table with empty cells.
-6. References: collect ALL citations from this chunk into a single section headed EXACTLY "## References" (two # characters, nothing more, nothing less) at the end, one bullet per entry, full citation text preserved. Do not use "#" or "###" for this heading.
+5. Tables: comparative or multi-attribute data MUST become a Markdown table with a header row AND fully populated data rows, copied verbatim from the input (see rule 2). If you cannot find real values to put in every cell, do NOT create a table — output that content as normal paragraph text instead. Never output a table with empty cells.
+6. References: in-text author-year mentions inside normal prose (e.g. "Dutta et al. (2021) introduced...") are NOT citations to collect — leave them exactly where they are, inline, as part of the paragraph. ONLY if this chunk contains an actual References/Bibliography section (a heading literally saying "References" or "Bibliography" followed by a list of full source entries) should you reproduce that section, headed EXACTLY "## References" (two # characters, nothing more, nothing less), with every entry preserved verbatim. If this chunk has no such section, do not output a References heading at all.
 7. Bold existing emphasis as **text**; italicise titles/terms as *text*.`;
 
 // ─── Markdown → docx Parser ──────────────────────────────────────────────────
