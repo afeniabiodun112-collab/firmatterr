@@ -540,19 +540,19 @@ const SYSTEM_PROMPT = `Convert raw text to Markdown. Rules:
 const FONT = "Times New Roman";
 const INCH = convertInchesToTwip(1);
 
-function makeRuns(text) {
+function makeRuns(text, size = 24) {
   const runs = [];
   const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
   for (const part of parts) {
     if (part.startsWith("**") && part.endsWith("**")) {
-      runs.push(new TextRun({ text: part.slice(2, -2), bold: true, font: FONT, size: 24 }));
+      runs.push(new TextRun({ text: part.slice(2, -2), bold: true, font: FONT, size }));
     } else if (part.startsWith("*") && part.endsWith("*")) {
-      runs.push(new TextRun({ text: part.slice(1, -1), italics: true, font: FONT, size: 24 }));
+      runs.push(new TextRun({ text: part.slice(1, -1), italics: true, font: FONT, size }));
     } else if (part) {
-      runs.push(new TextRun({ text: part, font: FONT, size: 24 }));
+      runs.push(new TextRun({ text: part, font: FONT, size }));
     }
   }
-  return runs.length ? runs : [new TextRun({ text: "", font: FONT, size: 24 })];
+  return runs.length ? runs : [new TextRun({ text: "", font: FONT, size })];
 }
 
 function lineSpacing() {
@@ -577,16 +577,23 @@ function parseMarkdownToDocx(md) {
       // filter out separator rows
       const dataRows = tableLines.filter(l => !/^\|[\s\-:|]+\|/.test(l.trim()));
       if (dataRows.length >= 1) {
+        // Calculate DXA widths (6.5 inch content area = 9360 DXA with 1" margins)
+        const numCols = dataRows[0].split("|").slice(1, -1).length || 1;
+        const tableWidth = 9360;
+        const colWidth = Math.floor(tableWidth / numCols);
+        const columnWidths = Array(numCols).fill(colWidth);
+
         const rows = dataRows.map((rowLine, rowIdx) => {
           const cells = rowLine.split("|").slice(1, -1).map(c => c.trim());
           return new TableRow({
             children: cells.map(cellText =>
               new TableCell({
-                shading: rowIdx === 0 ? { fill: "2a2f42", type: ShadingType.CLEAR, color: "auto" } : undefined,
+                width: { size: colWidth, type: WidthType.DXA },
+                shading: rowIdx === 0 ? { fill: "1F2937", type: ShadingType.CLEAR, color: "auto" } : undefined,
                 children: [new Paragraph({
                   children: rowIdx === 0
-                    ? [new TextRun({ text: cellText, bold: true, font: FONT, size: 20, color: rowIdx === 0 ? "FFFFFF" : "000000" })]
-                    : makeRuns(cellText).map(r => new TextRun({ ...r, size: 20 })),
+                    ? [new TextRun({ text: cellText, bold: true, font: FONT, size: 20, color: "FFFFFF" })]
+                    : makeRuns(cellText, 20),
                   spacing: { before: 60, after: 60 },
                 })],
                 margins: { top: 60, bottom: 60, left: 100, right: 100 },
@@ -596,7 +603,8 @@ function parseMarkdownToDocx(md) {
         });
 
         children.push(new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
+          width: { size: tableWidth, type: WidthType.DXA },
+          columnWidths,
           borders: {
             top: { style: BorderStyle.SINGLE, size: 4, color: "AAAAAA" },
             bottom: { style: BorderStyle.SINGLE, size: 4, color: "AAAAAA" },
