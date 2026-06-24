@@ -428,12 +428,12 @@ const HTML = `<!DOCTYPE html>
         if (i > 0) {
           // Countdown so the user knows it's not frozen
           for (let s = Math.ceil(DELAY_MS / 1000); s > 0; s--) {
-            setStatus('info', \`<span class=\"spinner\"></span><span>Chunk ${i}/${chunks.length} done \u2014 waiting ${s}s before next\u2026</span>\`);
+            setStatus('info', \`<span class=\"spinner\"></span><span>Chunk \${i}/\${chunks.length} done \u2014 waiting \${s}s before next\u2026</span>\`);
             await new Promise(r => setTimeout(r, 1000));
           }
         }
 
-        setStatus('info', \`<span class=\"spinner\"></span><span>Processing chunk ${i + 1} of ${chunks.length}\u2026</span>\`);
+        setStatus('info', \`<span class=\"spinner\"></span><span>Processing chunk \${i + 1} of \${chunks.length}\u2026</span>\`);
 
         const res = await fetch('/api/format-chunk', {
           method: 'POST',
@@ -470,7 +470,7 @@ const HTML = `<!DOCTYPE html>
       setStatus('success', '<span>\u2713 Document downloaded successfully!</span>');
 
     } catch (e) {
-      setStatus('error', \`<span>\u2717 ${e.message}</span>\`);
+      setStatus('error', \`<span>\u2717 \${e.message}</span>\`);
     } finally {
       btn.disabled = false;
       btn.innerHTML = \`
