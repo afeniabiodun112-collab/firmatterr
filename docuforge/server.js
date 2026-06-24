@@ -419,7 +419,7 @@ const HTML = `<!DOCTYPE html>
     const chunks = splitChunks(text, numChunks);
 
     btn.disabled = true;
-    btn.innerHTML = `<span class="spinner"></span> Formatting\u2026`;
+    btn.innerHTML = \`<span class="spinner"></span> Formatting\u2026\`;
 
     try {
       const markdownParts = [];
@@ -428,12 +428,12 @@ const HTML = `<!DOCTYPE html>
         if (i > 0) {
           // Countdown so the user knows it's not frozen
           for (let s = Math.ceil(DELAY_MS / 1000); s > 0; s--) {
-            setStatus('info', `<span class="spinner"></span><span>Chunk ${i}/${chunks.length} done \u2014 waiting ${s}s before next\u2026</span>`);
+            setStatus('info', \`<span class=\"spinner\"></span><span>Chunk ${i}/${chunks.length} done \u2014 waiting ${s}s before next\u2026</span>\`);
             await new Promise(r => setTimeout(r, 1000));
           }
         }
 
-        setStatus('info', `<span class="spinner"></span><span>Processing chunk ${i + 1} of ${chunks.length}\u2026</span>`);
+        setStatus('info', \`<span class=\"spinner\"></span><span>Processing chunk ${i + 1} of ${chunks.length}\u2026</span>\`);
 
         const res = await fetch('/api/format-chunk', {
           method: 'POST',
@@ -470,14 +470,14 @@ const HTML = `<!DOCTYPE html>
       setStatus('success', '<span>\u2713 Document downloaded successfully!</span>');
 
     } catch (e) {
-      setStatus('error', `<span>\u2717 ${e.message}</span>`);
+      setStatus('error', \`<span>\u2717 ${e.message}</span>\`);
     } finally {
       btn.disabled = false;
-      btn.innerHTML = `
+      btn.innerHTML = \`
         <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
         </svg>
-        Format &amp; Export .docx`;
+        Format &amp; Export .docx\`;
     }
   }
 </script>
