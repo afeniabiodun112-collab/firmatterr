@@ -386,6 +386,38 @@ const HTML = `<!DOCTYPE html>
     return out;
   }
 
+  // ── Table protection ────────────────────────────────────────────────────
+  // Small models reliably drop table cell data when asked to "reformat" a
+  // table that's already there. So: pull any pre-existing Markdown/pipe
+  // table OUT of the text before it ever reaches the AI, replace it with a
+  // tiny placeholder token, and splice the original table back in verbatim
+  // after formatting. The AI never sees (and can't corrupt) the cell data.
+  function extractTables(text) {
+    const lines = text.split('\\n');
+    const tables = {};
+    const outLines = [];
+    const isTableLine = (l) => /^\\s*\\|.*\\|\\s*$/.test(l);
+    let i = 0, counter = 1;
+    while (i < lines.length) {
+      if (isTableLine(lines[i])) {
+        const block = [];
+        while (i < lines.length && isTableLine(lines[i])) { block.push(lines[i]); i++; }
+        const key = 'TABLE_PLACEHOLDER_' + counter++;
+        tables[key] = block.join('\\n');
+        outLines.push('[[' + key + ']]');
+      } else {
+        outLines.push(lines[i]); i++;
+      }
+    }
+    return { text: outLines.join('\\n'), tables };
+  }
+
+  function reinsertTables(text, tables) {
+    let out = text;
+    for (const key in tables) out = out.split('[[' + key + ']]').join(tables[key]);
+    return out;
+  }
+
   function mergeMarkdowns(parts) {
     const bodies = [], refs = [];
     const refRe = /^#{1,3}\\s+references\\s*$/i;
@@ -404,14 +436,22 @@ const HTML = `<!DOCTYPE html>
     if (refs.length) {
       const seen = new Set();
       const unique = refs.filter(l => { const k = l.trim().toLowerCase(); return seen.has(k) ? false : seen.add(k); });
-      merged += '\\n\\n## References\\n\\n' + unique.join('\\n');
+      // Renumber sequentially ourselves — each AI call only sees one chunk,
+      // so only our merge step can guarantee correct 1, 2, 3... order.
+      const numbered = unique.map((l, idx) => {
+        const stripped = l.trim().replace(/^[-*+]\\s+/, '').replace(/^\\d+\\.\\s+/, '');
+        return (idx + 1) + '. ' + stripped;
+      });
+      merged += '\\n\\n## References\\n\\n' + numbered.join('\\n');
     }
     return merged;
   }
 
   async function handleFormat() {
-    const text = textarea.value.trim();
-    if (!text) { setStatus('error', '<span>⚠ Paste some text first.</span>'); return; }
+    const rawText = textarea.value.trim();
+    if (!rawText) { setStatus('error', '<span>⚠ Paste some text first.</span>'); return; }
+
+    const { text, tables } = extractTables(rawText);
 
     const DELAY_MS = 3000;
     const TARGET_TOKENS = 1200;
@@ -420,6 +460,7 @@ const HTML = `<!DOCTYPE html>
 
     btn.disabled = true;
     btn.innerHTML = \`<span class="spinner"></span> Formatting\u2026\`;
+
 
     try {
       const markdownParts = [];
@@ -449,7 +490,7 @@ const HTML = `<!DOCTYPE html>
       }
 
       setStatus('info', '<span class="spinner"></span><span>Building .docx file\u2026</span>');
-      const merged = mergeMarkdowns(markdownParts);
+      const merged = reinsertTables(mergeMarkdowns(markdownParts), tables);
 
       const docRes = await fetch('/api/build-docx', {
         method: 'POST',
@@ -488,10 +529,10 @@ const HTML = `<!DOCTYPE html>
 // Kept short and strict so gemini-3.1-flash-lite stays on-task per chunk.
 const SYSTEM_PROMPT = `Convert raw text to Markdown. Rules:
 1. Output ONLY Markdown — no commentary, no code fences.
-2. Preserve EVERY word and EVERY value exactly as given. Never summarise, omit, regenerate, or add content. If the input already contains a table (rows of data separated by | or aligned in columns), copy every cell's text into the Markdown table EXACTLY as written — never leave a cell blank, never rebuild the table from memory.
+2. Preserve EVERY word exactly as given. Never summarise, omit, regenerate, or add content.
 3. Headings: ONLY mark a line as a heading (#, ##, ###) if it is clearly a real section/document title in the source (e.g. "Methodology", "Results", "Discussion", "Conclusion", "References"). A normal sentence or citation discussion paragraph is NEVER a heading, no matter how it looks. Never bold/center a paragraph by turning it into a heading.
 4. Lists: enumerated items → numbered list; item groups → bullet list.
-5. Tables: comparative or multi-attribute data MUST become a Markdown table with a header row AND fully populated data rows, copied verbatim from the input (see rule 2). If you cannot find real values to put in every cell, do NOT create a table — output that content as normal paragraph text instead. Never output a table with empty cells.
+5. Tables: any line that looks exactly like [[TABLE_PLACEHOLDER_1]], [[TABLE_PLACEHOLDER_2]], etc. is a reserved token for a table that has ALREADY been extracted elsewhere. Output that exact token, completely unchanged, alone on its own line, in the same position — never modify it, never describe it, never try to rebuild a table around it. If the input contains genuinely new comparative/multi-attribute data with NO such placeholder, you may build a small Markdown table for it, but only if you can fully populate every cell with real values; otherwise leave it as plain paragraph text.
 6. References: in-text author-year mentions inside normal prose (e.g. "Dutta et al. (2021) introduced...") are NOT citations to collect — leave them exactly where they are, inline, as part of the paragraph. ONLY if this chunk contains an actual References/Bibliography section (a heading literally saying "References" or "Bibliography" followed by a list of full source entries) should you reproduce that section, headed EXACTLY "## References" (two # characters, nothing more, nothing less), with every entry preserved verbatim. If this chunk has no such section, do not output a References heading at all.
 7. Bold existing emphasis as **text**; italicise titles/terms as *text*.`;
 
