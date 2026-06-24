@@ -380,7 +380,8 @@ const HTML = `<!DOCTYPE html>
 
     btn.disabled = true;
     btn.innerHTML = \`<span class="spinner"></span> Formatting…\`;
-    setStatus('info', '<span class="spinner"></span><span>Processing text in chunks — this may take 15–30s…</span>');
+    const totalChunks = Math.min(8, Math.max(3, Math.ceil(text.length / (4 * 1200))));
+    setStatus('info', \`<span class="spinner"></span><span>Processing chunk 1 of \${totalChunks} — large documents take 1–3 min…</span>\`);
 
     try {
       const res = await fetch('/api/format', {
@@ -423,59 +424,15 @@ const HTML = `<!DOCTYPE html>
 </html>`;
 
 // ─── Groq System Prompt ──────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a document structure expert. Your ONLY job is to convert raw text into clean, well-structured Markdown. You NEVER summarize, shorten, paraphrase, or remove ANY content. Every word in the input must appear in the output.
-
-CRITICAL RULES — VIOLATING ANY OF THESE IS FAILURE:
-1. Return ONLY valid Markdown. No commentary, no preamble, no explanation, no code fences, no backtick blocks. Just raw Markdown text.
-2. NEVER remove, summarize, or alter any content. Preserve every sentence, every number, every name.
-3. NEVER add new content that wasn't in the original text.
-
-STRUCTURE DETECTION — apply ALL of these:
-
-TITLES & HEADINGS:
-- The first major topic or document title → # Title (H1)
-- Major section breaks, numbered sections (1., 2., I., II., A., B.) → ## Heading (H2)
-- Subsections, sub-topics → ### Subheading (H3)
-- If a line is clearly a label or header (short, standalone, contextually a section name) → make it a heading
-- Even unlabeled topic shifts should be marked as ## headings using the most logical section name
-
-PARAGRAPHS:
-- Continuous prose → plain paragraph text
-- Preserve all paragraph breaks
-
-BULLET LISTS:
-- Any list of items, even written as "First X, then Y, also Z" → convert to bullet list (- item)
-- Enumerated items in prose ("there are three factors: A, B, and C") → bullet list
-
-NUMBERED LISTS:
-- Sequential steps, ordered items → 1. 2. 3. numbered list
-
-TABLES — THIS IS CRITICAL:
-- ANY data that compares, contrasts, or enumerates attributes across multiple entities MUST become a Markdown table
-- This includes data written as prose like: "Product A costs $10 and has 5 features. Product B costs $20 and has 8 features." → TABLE
-- This includes sentences like "In 2020 revenue was $1M, in 2021 it was $2M" → TABLE
-- This includes any sentence patterns like "X has Y, Z has W" when comparing → TABLE
-- When in doubt, make it a table. Never leave comparative or multi-attribute data as prose.
-- Markdown table format: | Col1 | Col2 | Col3 |\\n|------|------|------|\\n| val | val | val |
-- Always include a header row with logical column names
-
-REFERENCES / BIBLIOGRAPHY:
-- Detect ALL citations, references, footnotes, endnotes, bibliography entries
-- Even inline citations like [1], (Smith, 2020), or numbered notes
-- Group ALL of them into a single ## References section at the VERY END of the document
-- Format each as a bullet: - [1] Author. Title. Journal. Year.
-- If citations appear mid-text, keep a marker in the text (e.g., [1]) and move the full reference to the References section
-
-FORMATTING DETAILS:
-- Bold: **text** for emphasis already present in original
-- Italics: *text* for titles of works, technical terms
-- Horizontal rule (---) between major sections only if a clear break exists in original
-
-FINAL CHECK before outputting:
-- Did you include every single sentence from the input? YES required.
-- Did you convert ALL comparative/tabular data to Markdown tables? YES required.
-- Did you group all references at the bottom? YES required.
-- Is your output pure Markdown with zero commentary? YES required.`;
+// Kept short to stay within Groq free tier (6 000 TPM).
+const SYSTEM_PROMPT = `Convert raw text to Markdown. Rules:
+1. Output ONLY Markdown — no commentary, no code fences.
+2. Preserve EVERY word. Never summarise, omit, or add content.
+3. Headings: document title → #, major sections → ##, subsections → ###.
+4. Lists: enumerated items → numbered list; item groups → bullet list.
+5. Tables: comparative or multi-attribute data MUST become a Markdown table with header row.
+6. References: collect ALL citations into a single ## References section at the end, one bullet per entry.
+7. Bold existing emphasis as **text**; italicise titles/terms as *text*.`;
 
 // ─── Markdown → docx Parser ──────────────────────────────────────────────────
 const FONT = "Times New Roman";
@@ -632,6 +589,12 @@ function parseMarkdownToDocx(md) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Dynamically pick chunk count: target ~1200 user tokens/chunk, clamp 3–8 */
+function calcChunkCount(text) {
+  const est = Math.ceil(text.length / 4);
+  return Math.min(8, Math.max(3, Math.ceil(est / 1200)));
+}
+
 /** Split text into N roughly-equal chunks at paragraph boundaries */
 function splitIntoParagraphChunks(text, n) {
   const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim());
@@ -697,7 +660,7 @@ function mergeMarkdowns(parts) {
 
 /** Call Groq for one chunk with a per-chunk timeout */
 async function processChunk(groq, chunk, chunkIndex) {
-  const CHUNK_TIMEOUT = 28000; // 28s per chunk
+  const CHUNK_TIMEOUT = 55000; // 55s per chunk (generous for slow Groq free tier)
   const completion = await Promise.race([
     groq.chat.completions.create({
       model: "llama-3.1-8b-instant",
@@ -706,7 +669,7 @@ async function processChunk(groq, chunk, chunkIndex) {
         { role: "user", content: chunk },
       ],
       temperature: 0.1,
-      max_tokens: 4096,
+      max_tokens: 2500,
     }),
     new Promise((_, reject) =>
       setTimeout(
@@ -727,20 +690,22 @@ app.post("/api/format", async (req, res) => {
 
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-  // Split into chunks to stay under Groq's free-tier TPM limit (6000 TPM).
-  // Chunks are sent sequentially with a 3s delay between each to avoid
-  // hitting the per-minute token cap.
-  const NUM_CHUNKS = 3;
-  const INTER_CHUNK_DELAY = 3000;
+  // Dynamic chunking: calcChunkCount targets ~1 200 user tokens/chunk so
+  // each call stays under Groq's 6 000 TPM free limit.
+  // 35 s delay between chunks lets the TPM window partially reset.
+  const NUM_CHUNKS = calcChunkCount(text);
+  const INTER_CHUNK_DELAY = 35000;
 
   const chunks = splitIntoParagraphChunks(text, NUM_CHUNKS);
   const markdownParts = [];
+
+  console.log(`Text ~${Math.ceil(text.length/4)} tokens → ${NUM_CHUNKS} chunks`);
 
   let markdown;
   try {
     for (let i = 0; i < chunks.length; i++) {
       if (i > 0) await sleep(INTER_CHUNK_DELAY);
-      console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
+      console.log(`Processing chunk ${i + 1}/${chunks.length} (~${Math.ceil(chunks[i].length/4)} tokens)`);
       const result = await processChunk(groq, chunks[i], i);
       markdownParts.push(result);
     }
