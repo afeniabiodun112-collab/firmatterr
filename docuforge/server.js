@@ -380,7 +380,7 @@ const HTML = `<!DOCTYPE html>
 
     btn.disabled = true;
     btn.innerHTML = \`<span class="spinner"></span> Formatting…\`;
-    setStatus('info', '<span class="spinner"></span><span>Sending to AI for structure detection…</span>');
+    setStatus('info', '<span class="spinner"></span><span>Processing text in chunks — this may take 15–30s…</span>');
 
     try {
       const res = await fetch('/api/format', {
@@ -629,6 +629,95 @@ function parseMarkdownToDocx(md) {
   return children;
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Split text into N roughly-equal chunks at paragraph boundaries */
+function splitIntoParagraphChunks(text, n) {
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim());
+  if (paragraphs.length <= n) return paragraphs.map((p) => p.trim());
+
+  const chunkSize = Math.ceil(paragraphs.length / n);
+  const chunks = [];
+  for (let i = 0; i < paragraphs.length; i += chunkSize) {
+    chunks.push(paragraphs.slice(i, i + chunkSize).join("\n\n").trim());
+  }
+  return chunks;
+}
+
+/**
+ * Merge multiple markdown outputs:
+ * - Concatenate body sections in order
+ * - Collect all ## References blocks and consolidate into one at the end
+ */
+function mergeMarkdowns(parts) {
+  const bodies = [];
+  const refLines = [];
+  const refHeadingRe = /^##\s+references\s*$/i;
+
+  for (const part of parts) {
+    const lines = part.split("\n");
+    let inRefs = false;
+    const bodyLines = [];
+
+    for (const line of lines) {
+      if (refHeadingRe.test(line.trim())) {
+        inRefs = true;
+        continue;
+      }
+      if (inRefs && line.trim().startsWith("## ")) {
+        // Another heading after references — stop collecting refs
+        inRefs = false;
+        bodyLines.push(line);
+        continue;
+      }
+      if (inRefs) {
+        if (line.trim()) refLines.push(line);
+      } else {
+        bodyLines.push(line);
+      }
+    }
+    bodies.push(bodyLines.join("\n").trim());
+  }
+
+  let merged = bodies.join("\n\n");
+  if (refLines.length) {
+    // Deduplicate reference lines
+    const seen = new Set();
+    const unique = refLines.filter((l) => {
+      const key = l.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    merged += "\n\n## References\n\n" + unique.join("\n");
+  }
+  return merged;
+}
+
+/** Call Groq for one chunk with a per-chunk timeout */
+async function processChunk(groq, chunk, chunkIndex) {
+  const CHUNK_TIMEOUT = 28000; // 28s per chunk
+  const completion = await Promise.race([
+    groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: chunk },
+      ],
+      temperature: 0.1,
+      max_tokens: 4096,
+    }),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Chunk ${chunkIndex + 1} timed out. Try with shorter text.`)),
+        CHUNK_TIMEOUT
+      )
+    ),
+  ]);
+  return completion.choices[0]?.message?.content || "";
+}
+
 // ─── API Route ───────────────────────────────────────────────────────────────
 app.post("/api/format", async (req, res) => {
   const { text } = req.body;
@@ -638,24 +727,24 @@ app.post("/api/format", async (req, res) => {
 
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+  // Split into chunks to stay under Groq's free-tier TPM limit (6000 TPM).
+  // Chunks are sent sequentially with a 3s delay between each to avoid
+  // hitting the per-minute token cap.
+  const NUM_CHUNKS = 3;
+  const INTER_CHUNK_DELAY = 3000;
+
+  const chunks = splitIntoParagraphChunks(text, NUM_CHUNKS);
+  const markdownParts = [];
+
   let markdown;
   try {
-    // llama-3.1-8b-instant: fastest Groq model, keeps us well within Render's 30s limit
-    const completion = await Promise.race([
-      groq.chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: text },
-        ],
-        temperature: 0.1,
-        max_tokens: 8192,
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Request timed out. Try with shorter text.")), 25000)
-      ),
-    ]);
-    markdown = completion.choices[0]?.message?.content || "";
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) await sleep(INTER_CHUNK_DELAY);
+      console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)`);
+      const result = await processChunk(groq, chunks[i], i);
+      markdownParts.push(result);
+    }
+    markdown = mergeMarkdowns(markdownParts);
   } catch (err) {
     console.error("Groq error:", err.message);
     return res.status(502).json({ error: "Groq API error: " + err.message });
